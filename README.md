@@ -8,6 +8,7 @@
 	<a href="https://goreportcard.com/report/github.com/spiral/roadrunner"><img src="https://goreportcard.com/badge/github.com/spiral/roadrunner"></a>
 	<a href="https://scrutinizer-ci.com/g/spiral/roadrunner/?branch=master"><img src="https://scrutinizer-ci.com/g/spiral/roadrunner/badges/quality-score.png"></a>
 	<a href="https://codecov.io/gh/spiral/roadrunner/"><img src="https://codecov.io/gh/spiral/roadrunner/branch/master/graph/badge.svg"></a>
+	<a href="https://lgtm.com/projects/g/spiral/roadrunner/alerts/"><img alt="Total alerts" src="https://img.shields.io/lgtm/alerts/g/spiral/roadrunner.svg?logo=lgtm&logoWidth=18"/></a>
 	<a href="https://discord.gg/TFeEmCs"><img src="https://img.shields.io/badge/discord-chat-magenta.svg"></a>
 </p>
 
@@ -44,7 +45,7 @@ Features:
 - Payload context and body
 - Protocol, worker and job level error management (including PHP errors)
 - Very fast (~250k rpc calls per second on Ryzen 1700X using 16 threads)
-- Integrations with Symfony, Laravel, Slim, CakePHP, Zend Expressive
+- Integrations with Symfony, [Laravel](https://github.com/spiral/roadrunner-laravel), Slim, CakePHP, Zend Expressive
 - Application server for [Spiral](https://github.com/spiral/framework)
 - Automatic reloading on file changes
 - Works on Windows (Unix sockets (AF_UNIX) supported on Windows 10)
