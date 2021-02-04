@@ -1,22 +1,14 @@
 status = [
-    'Build (PHP 7.2, basic setup)',
-    'Build (PHP 7.2, lowest setup)',
-    'Build (PHP 7.3, basic setup)',
-    'Build (PHP 7.3, lowest setup)',
-    'Build (PHP 8.0, basic setup)',
-    'Build (PHP 8.0, lowest setup)',
-    'Build (Go 1.14, PHP 7.2)',
-    'Build (Go 1.15, PHP 7.2)',
-    'Build (Go 1.14, PHP 7.3)',
-    'Build (Go 1.15, PHP 7.3)',
-    'Build (Go 1.14, PHP 7.4)',
-    'Build (Go 1.15, PHP 7.4)',
-    'Build (Go 1.14, PHP 8.0)',
-    'Build (Go 1.15, PHP 8.0)',
-    'Golang-CI (lint)',
-    'Build docker image',
+    'Linux / Build (Go 1.14, PHP 7.4, OS ubuntu-20.04)',
+    'Linux / Build (Go 1.15, PHP 7.4, OS ubuntu-20.04)',
+    'Linux / Build (Go 1.14, PHP 8.0, OS ubuntu-20.04)',
+    'Linux / Build (Go 1.15, PHP 8.0, OS ubuntu-20.04)',
+    'macOS / Build (Go 1.14, PHP 7.4, OS macos-latest)',
+    'macOS / Build (Go 1.15, PHP 7.4, OS macos-latest)',
+    'macOS / Build (Go 1.14, PHP 8.0, OS macos-latest)',
+    'macOS / Build (Go 1.15, PHP 8.0, OS macos-latest)',
+    'Linux / Golang-CI (lint) ',
 ]
-
 required_approvals = 0
 delete_merged_branches = true
 timeout-sec = 1800
