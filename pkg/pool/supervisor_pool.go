@@ -8,7 +8,6 @@ import (
 	"github.com/spiral/errors"
 	"github.com/spiral/roadrunner/v2/pkg/events"
 	"github.com/spiral/roadrunner/v2/pkg/payload"
-	"github.com/spiral/roadrunner/v2/pkg/states"
 	"github.com/spiral/roadrunner/v2/pkg/worker"
 	"github.com/spiral/roadrunner/v2/tools"
 )
@@ -100,13 +99,13 @@ func (sp *supervised) GetConfig() interface{} {
 	return sp.pool.GetConfig()
 }
 
-func (sp *supervised) Workers() (workers []worker.SyncWorker) {
+func (sp *supervised) Workers() (workers []worker.BaseProcess) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.pool.Workers()
 }
 
-func (sp *supervised) RemoveWorker(worker worker.SyncWorker) error {
+func (sp *supervised) RemoveWorker(worker worker.BaseProcess) error {
 	return sp.pool.RemoveWorker(worker)
 }
 
@@ -140,11 +139,12 @@ func (sp *supervised) control() {
 	now := time.Now()
 	const op = errors.Op("supervised_pool_control_tick")
 
-	// THIS IS A COPY OF WORKERS
+	// MIGHT BE OUTDATED
+	// It's a copy of the Workers pointers
 	workers := sp.pool.Workers()
 
 	for i := 0; i < len(workers); i++ {
-		if workers[i].State().Value() == states.StateInvalid {
+		if workers[i].State().Value() == worker.StateInvalid {
 			continue
 		}
 
@@ -177,7 +177,7 @@ func (sp *supervised) control() {
 		// firs we check maxWorker idle
 		if sp.cfg.IdleTTL != 0 {
 			// then check for the worker state
-			if workers[i].State().Value() != states.StateReady {
+			if workers[i].State().Value() != worker.StateReady {
 				continue
 			}
 
