@@ -1,6 +1,6 @@
 module github.com/spiral/roadrunner/v2
 
-go 1.15
+go 1.16
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1
@@ -10,7 +10,7 @@ require (
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fatih/color v1.10.0
 	github.com/go-ole/go-ole v1.2.5 // indirect
-	github.com/go-redis/redis/v8 v8.6.0
+	github.com/go-redis/redis/v8 v8.7.1
 	github.com/gofiber/fiber/v2 v2.5.0
 	github.com/golang/mock v1.4.4
 	github.com/hashicorp/go-multierror v1.1.0
@@ -20,7 +20,7 @@ require (
 	github.com/shirou/gopsutil v3.21.2+incompatible
 	github.com/spf13/viper v1.7.1
 	// SPIRAL ====
-	github.com/spiral/endure v1.0.0-RC.2
+	github.com/spiral/endure v1.0.0
 	github.com/spiral/errors v1.0.9
 	github.com/spiral/goridge/v3 v3.0.1
 	// ===========
