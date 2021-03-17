@@ -11,9 +11,9 @@ require (
 	github.com/fatih/color v1.10.0
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/go-redis/redis/v8 v8.7.1
-	github.com/gofiber/fiber/v2 v2.5.0
+	github.com/gofiber/fiber/v2 v2.6.0
 	github.com/golang/mock v1.4.4
-	github.com/hashicorp/go-multierror v1.1.0
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/json-iterator/go v1.1.10
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/prometheus/client_golang v1.9.0

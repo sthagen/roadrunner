@@ -53,7 +53,7 @@ func (c *HTTP) EnableHTTP() bool {
 
 // EnableTLS returns true if pool must listen TLS connections.
 func (c *HTTP) EnableTLS() bool {
-	return c.SSLConfig.Key != "" || c.SSLConfig.Cert != "" || c.SSLConfig.RootCA != ""
+	return c.SSLConfig.Key != "" || c.SSLConfig.Cert != ""
 }
 
 // EnableH2C when HTTP/2 extension must be enabled on TCP.
@@ -97,7 +97,7 @@ func (c *HTTP) InitDefaults() error {
 	}
 
 	if c.SSLConfig.Address == "" {
-		c.SSLConfig.Address = ":443"
+		c.SSLConfig.Address = "127.0.0.1:443"
 	}
 
 	err := c.HTTP2Config.InitDefaults()

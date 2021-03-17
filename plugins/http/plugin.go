@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/fcgi"
 	"net/url"
@@ -54,6 +55,8 @@ type Plugin struct {
 	// plugins
 	server server.Server
 	log    logger.Logger
+	// stdlog passed to the http/https/fcgi servers to log their internal messages
+	stdLog *log.Logger
 
 	cfg *httpConfig.HTTP `mapstructure:"http"`
 	// middlewares to chain
@@ -73,7 +76,7 @@ type Plugin struct {
 
 // Init must return configure svc and return true if svc hasStatus enabled. Must return error in case of
 // misconfiguration. Services must not be used without proper configuration pushed first.
-func (s *Plugin) Init(cfg config.Configurer, log logger.Logger, server server.Server) error {
+func (s *Plugin) Init(cfg config.Configurer, rrLogger logger.Logger, server server.Server) error {
 	const op = errors.Op("http_plugin_init")
 	if !cfg.Has(PluginName) {
 		return errors.E(op, errors.Disabled)
@@ -89,7 +92,11 @@ func (s *Plugin) Init(cfg config.Configurer, log logger.Logger, server server.Se
 		return errors.E(op, err)
 	}
 
-	s.log = log
+	// rr logger (via plugin)
+	s.log = rrLogger
+	// use time and date in UTC format
+	s.stdLog = log.New(logger.NewStdAdapter(s.log), "http_plugin: ", log.Ldate|log.Ltime|log.LUTC)
+
 	s.mdwr = make(map[string]Middleware)
 
 	if !s.cfg.EnableHTTP() && !s.cfg.EnableTLS() && !s.cfg.EnableFCGI() {
@@ -153,9 +160,9 @@ func (s *Plugin) Serve() chan error {
 
 	if s.cfg.EnableHTTP() {
 		if s.cfg.EnableH2C() {
-			s.http = &http.Server{Handler: h2c.NewHandler(s, &http2.Server{})}
+			s.http = &http.Server{Handler: h2c.NewHandler(s, &http2.Server{}), ErrorLog: s.stdLog}
 		} else {
-			s.http = &http.Server{Handler: s}
+			s.http = &http.Server{Handler: s, ErrorLog: s.stdLog}
 		}
 	}
 
@@ -179,62 +186,89 @@ func (s *Plugin) Serve() chan error {
 	}
 
 	if s.cfg.EnableFCGI() {
-		s.fcgi = &http.Server{Handler: s}
+		s.fcgi = &http.Server{Handler: s, ErrorLog: s.stdLog}
 	}
 
-	// apply middlewares before starting the server
-	if len(s.mdwr) > 0 {
-		s.addMiddlewares()
-	}
+	// start http, https and fcgi servers if requested in the config
+	go func() {
+		s.serveHTTP(errCh)
+	}()
 
-	if s.http != nil {
-		go func() {
-			l, err := utils.CreateListener(s.cfg.Address)
-			if err != nil {
-				errCh <- errors.E(op, err)
-				return
-			}
+	go func() {
+		s.serveHTTPS(errCh)
+	}()
 
-			err = s.http.Serve(l)
-			if err != nil && err != http.ErrServerClosed {
-				errCh <- errors.E(op, err)
-				return
-			}
-		}()
-	}
-
-	if s.https != nil {
-		go func() {
-			l, err := utils.CreateListener(s.cfg.SSLConfig.Address)
-			if err != nil {
-				errCh <- errors.E(op, err)
-				return
-			}
-
-			err = s.https.ServeTLS(
-				l,
-				s.cfg.SSLConfig.Cert,
-				s.cfg.SSLConfig.Key,
-			)
-
-			if err != nil && err != http.ErrServerClosed {
-				errCh <- errors.E(op, err)
-				return
-			}
-		}()
-	}
-
-	if s.fcgi != nil {
-		go func() {
-			httpErr := s.serveFCGI()
-			if httpErr != nil && httpErr != http.ErrServerClosed {
-				errCh <- errors.E(op, httpErr)
-				return
-			}
-		}()
-	}
+	go func() {
+		s.serveFCGI(errCh)
+	}()
 
 	return errCh
+}
+
+func (s *Plugin) serveHTTP(errCh chan error) {
+	if s.http == nil {
+		return
+	}
+
+	const op = errors.Op("http_plugin_serve_http")
+	applyMiddlewares(s.http, s.mdwr, s.cfg.Middleware, s.log)
+	l, err := utils.CreateListener(s.cfg.Address)
+	if err != nil {
+		errCh <- errors.E(op, err)
+		return
+	}
+
+	err = s.http.Serve(l)
+	if err != nil && err != http.ErrServerClosed {
+		errCh <- errors.E(op, err)
+		return
+	}
+}
+
+func (s *Plugin) serveHTTPS(errCh chan error) {
+	if s.https == nil {
+		return
+	}
+
+	const op = errors.Op("http_plugin_serve_https")
+	applyMiddlewares(s.https, s.mdwr, s.cfg.Middleware, s.log)
+	l, err := utils.CreateListener(s.cfg.SSLConfig.Address)
+	if err != nil {
+		errCh <- errors.E(op, err)
+		return
+	}
+
+	err = s.https.ServeTLS(
+		l,
+		s.cfg.SSLConfig.Cert,
+		s.cfg.SSLConfig.Key,
+	)
+
+	if err != nil && err != http.ErrServerClosed {
+		errCh <- errors.E(op, err)
+		return
+	}
+}
+
+// serveFCGI starts FastCGI server.
+func (s *Plugin) serveFCGI(errCh chan error) {
+	if s.fcgi == nil {
+		return
+	}
+
+	const op = errors.Op("http_plugin_serve_fcgi")
+	applyMiddlewares(s.fcgi, s.mdwr, s.cfg.Middleware, s.log)
+	l, err := utils.CreateListener(s.cfg.FCGIConfig.Address)
+	if err != nil {
+		errCh <- errors.E(op, err)
+		return
+	}
+
+	err = fcgi.Serve(l, s.fcgi.Handler)
+	if err != nil && err != http.ErrServerClosed {
+		errCh <- errors.E(op, err)
+		return
+	}
 }
 
 // Stop stops the http.
@@ -277,7 +311,7 @@ func (s *Plugin) Stop() error {
 
 // ServeHTTP handles connection using set of middleware and pool PSR-7 server.
 func (s *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if headerContainsUpgrade(r, s) {
+	if headerContainsUpgrade(r) {
 		http.Error(w, "server does not support upgrade header", http.StatusInternalServerError)
 		return
 	}
@@ -292,7 +326,7 @@ func (s *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r = attributes.Init(r)
-	// protect the case, when user send Reset and we are replacing handler with pool
+	// protect the case, when user sendEvent Reset and we are replacing handler with pool
 	s.RLock()
 	s.handler.ServeHTTP(w, r)
 	s.RUnlock()
@@ -384,14 +418,13 @@ func (s *Plugin) redirect(w http.ResponseWriter, r *http.Request) {
 		RawQuery: r.URL.RawQuery,
 	}
 
-	http.Redirect(w, r, target.String(), http.StatusTemporaryRedirect)
+	http.Redirect(w, r, target.String(), http.StatusPermanentRedirect)
 }
 
+// https://golang.org/pkg/net/http/#Hijacker
 //go:inline
-func headerContainsUpgrade(r *http.Request, s *Plugin) bool {
+func headerContainsUpgrade(r *http.Request) bool {
 	if _, ok := r.Header["Upgrade"]; ok {
-		// https://golang.org/pkg/net/http/#Hijacker
-		s.log.Error("server does not support Upgrade header")
 		return true
 	}
 	return false
@@ -480,8 +513,9 @@ func (s *Plugin) initSSL() *http.Server {
 	DefaultCipherSuites = append(DefaultCipherSuites, defaultCipherSuitesTLS13...)
 
 	sslServer := &http.Server{
-		Addr:    s.tlsAddr(s.cfg.Address, true),
-		Handler: s,
+		Addr:     s.tlsAddr(s.cfg.Address, true),
+		Handler:  s,
+		ErrorLog: s.stdLog,
 		TLSConfig: &tls.Config{
 			CurvePreferences: []tls.CurveID{
 				tls.CurveP256,
@@ -505,21 +539,6 @@ func (s *Plugin) initHTTP2() error {
 	})
 }
 
-// serveFCGI starts FastCGI server.
-func (s *Plugin) serveFCGI() error {
-	l, err := utils.CreateListener(s.cfg.FCGIConfig.Address)
-	if err != nil {
-		return err
-	}
-
-	err = fcgi.Serve(l, s.fcgi.Handler)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // tlsAddr replaces listen or host port with port configured by SSLConfig config.
 func (s *Plugin) tlsAddr(host string, forcePort bool) string {
 	// remove current forcePort first
@@ -532,20 +551,10 @@ func (s *Plugin) tlsAddr(host string, forcePort bool) string {
 	return host
 }
 
-func (s *Plugin) addMiddlewares() {
-	if s.http != nil {
-		applyMiddlewares(s.http, s.mdwr, s.cfg.Middleware, s.log)
-	}
-	if s.https != nil {
-		applyMiddlewares(s.https, s.mdwr, s.cfg.Middleware, s.log)
-	}
-
-	if s.fcgi != nil {
-		applyMiddlewares(s.fcgi, s.mdwr, s.cfg.Middleware, s.log)
-	}
-}
-
 func applyMiddlewares(server *http.Server, middlewares map[string]Middleware, order []string, log logger.Logger) {
+	if len(middlewares) == 0 {
+		return
+	}
 	for i := 0; i < len(order); i++ {
 		if mdwr, ok := middlewares[order[i]]; ok {
 			server.Handler = mdwr.Middleware(server.Handler)
