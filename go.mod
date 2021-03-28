@@ -10,13 +10,13 @@ require (
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fatih/color v1.10.0
 	github.com/go-ole/go-ole v1.2.5 // indirect
-	github.com/go-redis/redis/v8 v8.7.1
+	github.com/go-redis/redis/v8 v8.8.0
 	github.com/gofiber/fiber/v2 v2.6.0
 	github.com/golang/mock v1.4.4
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/json-iterator/go v1.1.10
 	github.com/olekukonko/tablewriter v0.0.5
-	github.com/prometheus/client_golang v1.9.0
+	github.com/prometheus/client_golang v1.10.0
 	github.com/shirou/gopsutil v3.21.2+incompatible
 	github.com/spf13/viper v1.7.1
 	// SPIRAL ====
@@ -33,5 +33,5 @@ require (
 	go.uber.org/zap v1.16.0
 	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
 	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a
-	golang.org/x/sys v0.0.0-20210217105451-b926d437f341
+	golang.org/x/sys v0.0.0-20210309074719-68d13333faf2
 )
