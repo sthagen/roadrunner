@@ -11,11 +11,10 @@ require (
 	github.com/fatih/color v1.10.0
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/go-redis/redis/v8 v8.8.0
-	github.com/gofiber/fiber/v2 v2.7.1
+	github.com/gofiber/fiber/v2 v2.8.0
 	github.com/golang/mock v1.4.4
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/json-iterator/go v1.1.10
-	github.com/kami-zh/go-capturer v0.0.0-20171211120116-e492ea43421d
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/prometheus/client_golang v1.10.0
 	github.com/shirou/gopsutil v3.21.3+incompatible
@@ -32,7 +31,7 @@ require (
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/multierr v1.6.0
 	go.uber.org/zap v1.16.0
-	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
+	golang.org/x/net v0.0.0-20210226101413-39120d07d75e
 	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a
 	golang.org/x/sys v0.0.0-20210309074719-68d13333faf2
 )
