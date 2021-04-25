@@ -21,13 +21,13 @@ import (
 	endure "github.com/spiral/endure/pkg/container"
 	goridgeRpc "github.com/spiral/goridge/v3/pkg/rpc"
 	"github.com/spiral/roadrunner/v2/pkg/events"
+	"github.com/spiral/roadrunner/v2/pkg/process"
 	"github.com/spiral/roadrunner/v2/plugins/config"
 	"github.com/spiral/roadrunner/v2/plugins/informer"
 	"github.com/spiral/roadrunner/v2/plugins/logger"
 	"github.com/spiral/roadrunner/v2/plugins/resetter"
 	"github.com/spiral/roadrunner/v2/plugins/server"
 	"github.com/spiral/roadrunner/v2/tests/mocks"
-	"github.com/spiral/roadrunner/v2/tools"
 	"github.com/yookoala/gofast"
 
 	httpPlugin "github.com/spiral/roadrunner/v2/plugins/http"
@@ -288,7 +288,7 @@ func informerTest(t *testing.T) {
 	// WorkerList contains list of workers.
 	list := struct {
 		// Workers is list of workers.
-		Workers []tools.ProcessState `json:"workers"`
+		Workers []process.State `json:"workers"`
 	}{}
 
 	err = client.Call("informer.Workers", "http", &list)
@@ -1227,10 +1227,43 @@ func TestHttpBrokenPipes(t *testing.T) {
 	err = cont.Init()
 	assert.NoError(t, err)
 
-	_, err = cont.Serve()
-	assert.Error(t, err)
+	ch, err := cont.Serve()
+	assert.NoError(t, err)
 
-	assert.NoError(t, cont.Stop())
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	stopCh := make(chan struct{}, 1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			// should be error from the plugin
+			case e := <-ch:
+				assert.Error(t, e.Error)
+				return
+			case <-sig:
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			case <-stopCh:
+				// timeout
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
 }
 
 func TestHTTPSupervisedPool(t *testing.T) {
@@ -1336,7 +1369,7 @@ func informerTestBefore(t *testing.T) {
 	// WorkerList contains list of workers.
 	list := struct {
 		// Workers is list of workers.
-		Workers []tools.ProcessState `json:"workers"`
+		Workers []process.State `json:"workers"`
 	}{}
 
 	err = client.Call("informer.Workers", "http", &list)
@@ -1353,7 +1386,7 @@ func informerTestAfter(t *testing.T) {
 	// WorkerList contains list of workers.
 	list := struct {
 		// Workers is list of workers.
-		Workers []tools.ProcessState `json:"workers"`
+		Workers []process.State `json:"workers"`
 	}{}
 
 	assert.NotZero(t, workerPid)
@@ -1511,6 +1544,8 @@ func TestHTTPBigRequestSize(t *testing.T) {
 			}
 		}
 	}()
+
+	time.Sleep(time.Second * 2)
 
 	t.Run("HTTPBigEcho10Mb", bigEchoHTTP)
 

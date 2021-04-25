@@ -17,6 +17,7 @@ import (
 	endure "github.com/spiral/endure/pkg/container"
 	"github.com/spiral/errors"
 	"github.com/spiral/roadrunner/v2/pkg/pool"
+	"github.com/spiral/roadrunner/v2/pkg/process"
 	"github.com/spiral/roadrunner/v2/pkg/worker"
 	"github.com/spiral/roadrunner/v2/plugins/config"
 	"github.com/spiral/roadrunner/v2/plugins/http/attributes"
@@ -125,13 +126,21 @@ func (s *Plugin) logCallback(event interface{}) {
 
 // Serve serves the svc.
 func (s *Plugin) Serve() chan error {
-	s.Lock()
-	defer s.Unlock()
-
-	const op = errors.Op("http_plugin_serve")
 	errCh := make(chan error, 2)
+	// run whole process in the goroutine
+	go func() {
+		// protect http initialization
+		s.Lock()
+		s.serve(errCh)
+		s.Unlock()
+	}()
 
+	return errCh
+}
+
+func (s *Plugin) serve(errCh chan error) {
 	var err error
+	const op = errors.Op("http_plugin_serve")
 	s.pool, err = s.server.NewWorkerPool(context.Background(), pool.Config{
 		Debug:           s.cfg.Pool.Debug,
 		NumWorkers:      s.cfg.Pool.NumWorkers,
@@ -142,7 +151,7 @@ func (s *Plugin) Serve() chan error {
 	}, s.cfg.Env, s.logCallback)
 	if err != nil {
 		errCh <- errors.E(op, err)
-		return errCh
+		return
 	}
 
 	s.handler, err = NewHandler(
@@ -153,7 +162,7 @@ func (s *Plugin) Serve() chan error {
 	)
 	if err != nil {
 		errCh <- errors.E(op, err)
-		return errCh
+		return
 	}
 
 	s.handler.AddListener(s.logCallback)
@@ -172,7 +181,7 @@ func (s *Plugin) Serve() chan error {
 			err = s.appendRootCa()
 			if err != nil {
 				errCh <- errors.E(op, err)
-				return errCh
+				return
 			}
 		}
 
@@ -180,7 +189,7 @@ func (s *Plugin) Serve() chan error {
 		if s.cfg.HTTP2Config != nil {
 			if err := s.initHTTP2(); err != nil {
 				errCh <- errors.E(op, err)
-				return errCh
+				return
 			}
 		}
 	}
@@ -201,8 +210,6 @@ func (s *Plugin) Serve() chan error {
 	go func() {
 		s.serveFCGI(errCh)
 	}()
-
-	return errCh
 }
 
 func (s *Plugin) serveHTTP(errCh chan error) {
@@ -304,7 +311,10 @@ func (s *Plugin) Stop() error {
 		}
 	}
 
-	s.pool.Destroy(context.Background())
+	// check for safety
+	if s.pool != nil {
+		s.pool.Destroy(context.Background())
+	}
 
 	return err
 }
@@ -332,8 +342,27 @@ func (s *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.RUnlock()
 }
 
-// Workers returns associated pool workers
-func (s *Plugin) Workers() []worker.BaseProcess {
+// Workers returns slice with the process states for the workers
+func (s *Plugin) Workers() []process.State {
+	s.RLock()
+	defer s.RUnlock()
+
+	workers := s.workers()
+
+	ps := make([]process.State, 0, len(workers))
+	for i := 0; i < len(workers); i++ {
+		state, err := process.WorkerProcessState(workers[i])
+		if err != nil {
+			return nil
+		}
+		ps = append(ps, state)
+	}
+
+	return ps
+}
+
+// internal
+func (s *Plugin) workers() []worker.BaseProcess {
 	return s.pool.Workers()
 }
 
@@ -364,9 +393,8 @@ func (s *Plugin) Reset() error {
 		return errors.E(op, err)
 	}
 
-	s.log.Info("HTTP listeners successfully re-added")
-
 	s.log.Info("HTTP workers Pool successfully restarted")
+
 	s.handler, err = NewHandler(
 		s.cfg.MaxRequestSize,
 		*s.cfg.Uploads,
@@ -376,6 +404,9 @@ func (s *Plugin) Reset() error {
 	if err != nil {
 		return errors.E(op, err)
 	}
+
+	s.log.Info("HTTP handler listeners successfully re-added")
+	s.handler.AddListener(s.logCallback)
 
 	s.log.Info("HTTP plugin successfully restarted")
 	return nil
@@ -395,7 +426,10 @@ func (s *Plugin) AddMiddleware(name endure.Named, m Middleware) {
 
 // Status return status of the particular plugin
 func (s *Plugin) Status() status.Status {
-	workers := s.Workers()
+	s.RLock()
+	defer s.RUnlock()
+
+	workers := s.workers()
 	for i := 0; i < len(workers); i++ {
 		if workers[i].State().IsActive() {
 			return status.Status{
@@ -409,9 +443,12 @@ func (s *Plugin) Status() status.Status {
 	}
 }
 
-// Status return status of the particular plugin
+// Ready return readiness status of the particular plugin
 func (s *Plugin) Ready() status.Status {
-	workers := s.Workers()
+	s.RLock()
+	defer s.RUnlock()
+
+	workers := s.workers()
 	for i := 0; i < len(workers); i++ {
 		// If state of the worker is ready (at least 1)
 		// we assume, that plugin's worker pool is ready
