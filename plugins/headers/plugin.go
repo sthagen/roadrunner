@@ -8,11 +8,11 @@ import (
 	"github.com/spiral/roadrunner/v2/plugins/config"
 )
 
-// ID contains default service name.
+// PluginName contains default service name.
 const PluginName = "headers"
 const RootPluginName = "http"
 
-// Service serves headers files. Potentially convert into middleware?
+// Plugin serves headers files. Potentially convert into middleware?
 type Plugin struct {
 	// server configuration (location, forbidden files and etc)
 	cfg *Config
@@ -37,10 +37,10 @@ func (s *Plugin) Init(cfg config.Configurer) error {
 	return nil
 }
 
-// middleware must return true if request/response pair is handled within the middleware.
-func (s *Plugin) Middleware(next http.Handler) http.HandlerFunc {
+// Middleware is HTTP plugin middleware to serve headers
+func (s *Plugin) Middleware(next http.Handler) http.Handler {
 	// Define the http.HandlerFunc
-	return func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Headers.Request != nil {
 			for k, v := range s.cfg.Headers.Request {
 				r.Header.Add(k, v)
@@ -62,12 +62,15 @@ func (s *Plugin) Middleware(next http.Handler) http.HandlerFunc {
 		}
 
 		next.ServeHTTP(w, r)
-	}
+	})
 }
 
 func (s *Plugin) Name() string {
 	return PluginName
 }
+
+// Available interface implementation
+func (s *Plugin) Available() {}
 
 // configure OPTIONS response
 func (s *Plugin) preflightRequest(w http.ResponseWriter) {

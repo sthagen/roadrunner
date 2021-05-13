@@ -51,11 +51,6 @@ func (z *ZapLogger) Init(cfg config.Configurer) error {
 	return nil
 }
 
-// DefaultLogger returns default logger.
-func (z *ZapLogger) DefaultLogger() (Logger, error) {
-	return NewZapAdapter(z.base), nil
-}
-
 // NamedLogger returns logger dedicated to the specific channel. Similar to Named() but also reads the core params.
 func (z *ZapLogger) NamedLogger(name string) (Logger, error) {
 	if cfg, ok := z.channels.Channels[name]; ok {
@@ -78,6 +73,14 @@ func (z *ZapLogger) ServiceLogger(n endure.Named) (Logger, error) {
 func (z *ZapLogger) Provides() []interface{} {
 	return []interface{}{
 		z.ServiceLogger,
-		z.DefaultLogger,
 	}
+}
+
+// Name returns user-friendly plugin name
+func (z *ZapLogger) Name() string {
+	return PluginName
+}
+
+// Available interface implementation
+func (z *ZapLogger) Available() {
 }
