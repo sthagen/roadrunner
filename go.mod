@@ -12,7 +12,7 @@ require (
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/go-redis/redis/v8 v8.8.2
 	github.com/gofiber/fiber/v2 v2.9.0
-	github.com/golang/mock v1.4.4
+	github.com/golang/mock v1.5.0
 	github.com/google/flatbuffers v1.12.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/json-iterator/go v1.1.11
