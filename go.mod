@@ -12,7 +12,7 @@ require (
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/go-redis/redis/v8 v8.8.2
 	github.com/gofiber/fiber/v2 v2.9.0
-	github.com/golang/mock v1.4.4
+	github.com/golang/mock v1.6.0
 	github.com/google/flatbuffers v1.12.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/json-iterator/go v1.1.11
@@ -32,7 +32,7 @@ require (
 	go.etcd.io/bbolt v1.3.5
 	go.uber.org/multierr v1.7.0
 	go.uber.org/zap v1.16.0
-	golang.org/x/net v0.0.0-20210226101413-39120d07d75e
-	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a
-	golang.org/x/sys v0.0.0-20210309074719-68d13333faf2
+	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+	golang.org/x/sys v0.0.0-20210510120138-977fb7262007
 )
