@@ -7,13 +7,16 @@ import (
 	"time"
 
 	"github.com/spiral/errors"
-	poolImpl "github.com/spiral/roadrunner/v2/pkg/pool"
+	"github.com/spiral/roadrunner/v2/pkg/pool"
 )
 
 // HTTP configures RoadRunner HTTP server.
 type HTTP struct {
 	// Host and port to handle as http server.
 	Address string
+
+	// InternalErrorCode used to override default 500 (InternalServerError) http code
+	InternalErrorCode uint64 `mapstructure:"internal_error_code"`
 
 	// SSLConfig defines https server options.
 	SSLConfig *SSL `mapstructure:"ssl"`
@@ -33,11 +36,8 @@ type HTTP struct {
 	// Uploads configures uploads configuration.
 	Uploads *Uploads `mapstructure:"uploads"`
 
-	// static configuration
-	Static *Static `mapstructure:"static"`
-
 	// Pool configures worker pool.
-	Pool *poolImpl.Config `mapstructure:"pool"`
+	Pool *pool.Config `mapstructure:"pool"`
 
 	// Env is environment variables passed to the  http pool
 	Env map[string]string
@@ -73,7 +73,7 @@ func (c *HTTP) EnableFCGI() bool {
 func (c *HTTP) InitDefaults() error {
 	if c.Pool == nil {
 		// default pool
-		c.Pool = &poolImpl.Config{
+		c.Pool = &pool.Config{
 			Debug:           false,
 			NumWorkers:      uint64(runtime.NumCPU()),
 			MaxJobs:         0,
@@ -81,6 +81,10 @@ func (c *HTTP) InitDefaults() error {
 			DestroyTimeout:  time.Second * 60,
 			Supervisor:      nil,
 		}
+	}
+
+	if c.InternalErrorCode == 0 {
+		c.InternalErrorCode = 500
 	}
 
 	if c.HTTP2Config == nil {
@@ -101,16 +105,6 @@ func (c *HTTP) InitDefaults() error {
 
 	if c.SSLConfig.Address == "" {
 		c.SSLConfig.Address = "127.0.0.1:443"
-	}
-
-	// static files
-	if c.Static != nil {
-		if c.Static.Pattern == "" {
-			c.Static.Pattern = "/static/"
-		}
-		if c.Static.Dir == "" {
-			c.Static.Dir = "."
-		}
 	}
 
 	err := c.HTTP2Config.InitDefaults()
@@ -184,14 +178,6 @@ func (c *HTTP) Valid() error {
 
 	if c.EnableTLS() {
 		err := c.SSLConfig.Valid()
-		if err != nil {
-			return errors.E(op, err)
-		}
-	}
-
-	// validate static
-	if c.Static != nil {
-		err := c.Static.Valid()
 		if err != nil {
 			return errors.E(op, err)
 		}

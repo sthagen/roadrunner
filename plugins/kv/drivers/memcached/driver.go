@@ -9,6 +9,7 @@ import (
 	"github.com/spiral/roadrunner/v2/plugins/config"
 	"github.com/spiral/roadrunner/v2/plugins/kv"
 	"github.com/spiral/roadrunner/v2/plugins/logger"
+	kvv1 "github.com/spiral/roadrunner/v2/proto/kv/v1beta"
 )
 
 type Driver struct {
@@ -95,7 +96,7 @@ func (d *Driver) Get(key string) ([]byte, error) {
 
 // MGet return map with key -- string
 // and map value as value -- []byte
-func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
+func (d *Driver) MGet(keys ...string) (map[string][]byte, error) {
 	const op = errors.Op("memcached_plugin_mget")
 	if keys == nil {
 		return nil, errors.E(op, errors.NoKeys)
@@ -109,7 +110,7 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 		}
 	}
 
-	m := make(map[string]interface{}, len(keys))
+	m := make(map[string][]byte, len(keys))
 	for i := range keys {
 		// Here also MultiGet
 		data, err := d.client.Get(keys[i])
@@ -133,14 +134,14 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 // Expiration is the cache expiration time, in seconds: either a relative
 // time from now (up to 1 month), or an absolute Unix epoch time.
 // Zero means the Item has no expiration time.
-func (d *Driver) Set(items ...kv.Item) error {
+func (d *Driver) Set(items ...*kvv1.Item) error {
 	const op = errors.Op("memcached_plugin_set")
 	if items == nil {
 		return errors.E(op, errors.NoKeys)
 	}
 
 	for i := range items {
-		if items[i] == EmptyItem {
+		if items[i] == nil {
 			return errors.E(op, errors.EmptyItem)
 		}
 
@@ -148,14 +149,14 @@ func (d *Driver) Set(items ...kv.Item) error {
 		memcachedItem := &memcache.Item{
 			Key: items[i].Key,
 			// unsafe convert
-			Value: []byte(items[i].Value),
+			Value: items[i].Value,
 			Flags: 0,
 		}
 
 		// add additional TTL in case of TTL isn't empty
-		if items[i].TTL != "" {
+		if items[i].Timeout != "" {
 			// verify the TTL
-			t, err := time.Parse(time.RFC3339, items[i].TTL)
+			t, err := time.Parse(time.RFC3339, items[i].Timeout)
 			if err != nil {
 				return err
 			}
@@ -174,15 +175,18 @@ func (d *Driver) Set(items ...kv.Item) error {
 // MExpire Expiration is the cache expiration time, in seconds: either a relative
 // time from now (up to 1 month), or an absolute Unix epoch time.
 // Zero means the Item has no expiration time.
-func (d *Driver) MExpire(items ...kv.Item) error {
+func (d *Driver) MExpire(items ...*kvv1.Item) error {
 	const op = errors.Op("memcached_plugin_mexpire")
 	for i := range items {
-		if items[i].TTL == "" || strings.TrimSpace(items[i].Key) == "" {
+		if items[i] == nil {
+			continue
+		}
+		if items[i].Timeout == "" || strings.TrimSpace(items[i].Key) == "" {
 			return errors.E(op, errors.Str("should set timeout and at least one key"))
 		}
 
 		// verify provided TTL
-		t, err := time.Parse(time.RFC3339, items[i].TTL)
+		t, err := time.Parse(time.RFC3339, items[i].Timeout)
 		if err != nil {
 			return errors.E(op, err)
 		}
@@ -201,7 +205,7 @@ func (d *Driver) MExpire(items ...kv.Item) error {
 }
 
 // TTL return time in seconds (int32) for a given keys
-func (d *Driver) TTL(_ ...string) (map[string]interface{}, error) {
+func (d *Driver) TTL(_ ...string) (map[string]string, error) {
 	const op = errors.Op("memcached_plugin_ttl")
 	return nil, errors.E(op, errors.Str("not valid request for memcached, see https://github.com/memcached/memcached/issues/239"))
 }
@@ -231,5 +235,15 @@ func (d *Driver) Delete(keys ...string) error {
 			return errors.E(op, err)
 		}
 	}
+	return nil
+}
+
+func (d *Driver) Clear() error {
+	err := d.client.DeleteAll()
+	if err != nil {
+		d.log.Error("flush_all operation failed", "error", err)
+		return err
+	}
+
 	return nil
 }

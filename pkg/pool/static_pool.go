@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"time"
-	"unsafe"
 
 	"github.com/spiral/errors"
 	"github.com/spiral/roadrunner/v2/pkg/events"
@@ -12,6 +11,7 @@ import (
 	"github.com/spiral/roadrunner/v2/pkg/transport"
 	"github.com/spiral/roadrunner/v2/pkg/worker"
 	workerWatcher "github.com/spiral/roadrunner/v2/pkg/worker_watcher"
+	"github.com/spiral/roadrunner/v2/utils"
 )
 
 // StopRequest can be sent by worker to indicate that restart is required.
@@ -46,8 +46,8 @@ type StaticPool struct {
 	// allocate new worker
 	allocator worker.Allocator
 
-	// err_encoder is the default Exec error encoder
-	err_encoder ErrorEncoder //nolint:golint,stylecheck
+	// errEncoder is the default Exec error encoder
+	errEncoder ErrorEncoder
 }
 
 // Initialize creates new worker pool and task multiplexer. StaticPool will initiate with one worker.
@@ -92,7 +92,7 @@ func Initialize(ctx context.Context, cmd Command, factory transport.Factory, cfg
 		return nil, errors.E(op, err)
 	}
 
-	p.err_encoder = defaultErrEncoder(p)
+	p.errEncoder = defaultErrEncoder(p)
 
 	// if supervised config not nil, guess, that pool wanted to be supervised
 	if cfg.Supervisor != nil {
@@ -149,11 +149,11 @@ func (sp *StaticPool) Exec(p payload.Payload) (payload.Payload, error) {
 
 	rsp, err := w.(worker.SyncWorker).Exec(p)
 	if err != nil {
-		return sp.err_encoder(err, w)
+		return sp.errEncoder(err, w)
 	}
 
 	// worker want's to be terminated
-	if len(rsp.Body) == 0 && toString(rsp.Context) == StopRequest {
+	if len(rsp.Body) == 0 && utils.AsString(rsp.Context) == StopRequest {
 		sp.stopWorker(w)
 		return sp.Exec(p)
 	}
@@ -174,7 +174,7 @@ func (sp *StaticPool) execWithTTL(ctx context.Context, p payload.Payload) (paylo
 		return sp.execDebugWithTTL(ctx, p)
 	}
 
-	ctxAlloc, cancel := context.WithTimeout(ctx, sp.cfg.AllocateTimeout)
+	ctxAlloc, cancel := context.WithTimeout(context.Background(), sp.cfg.AllocateTimeout)
 	defer cancel()
 	w, err := sp.getWorker(ctxAlloc, op)
 	if err != nil {
@@ -183,11 +183,11 @@ func (sp *StaticPool) execWithTTL(ctx context.Context, p payload.Payload) (paylo
 
 	rsp, err := w.(worker.SyncWorker).ExecWithTTL(ctx, p)
 	if err != nil {
-		return sp.err_encoder(err, w)
+		return sp.errEncoder(err, w)
 	}
 
 	// worker want's to be terminated
-	if len(rsp.Body) == 0 && toString(rsp.Context) == StopRequest {
+	if len(rsp.Body) == 0 && utils.AsString(rsp.Context) == StopRequest {
 		sp.stopWorker(w)
 		return sp.execWithTTL(ctx, p)
 	}
@@ -245,7 +245,7 @@ func (sp *StaticPool) Destroy(ctx context.Context) {
 
 func defaultErrEncoder(sp *StaticPool) ErrorEncoder {
 	return func(err error, w worker.BaseProcess) (payload.Payload, error) {
-		const op = errors.Op("error encoder")
+		const op = errors.Op("error_encoder")
 		// just push event if on any stage was timeout error
 		switch {
 		case errors.Is(errors.ExecTTL, err):
@@ -264,6 +264,7 @@ func defaultErrEncoder(sp *StaticPool) ErrorEncoder {
 					sp.events.Push(events.WorkerEvent{Event: events.EventWorkerError, Worker: w, Payload: errors.E(op, err)})
 				}
 			} else {
+				sp.events.Push(events.WorkerEvent{Event: events.EventWorkerError, Worker: w, Payload: err})
 				sp.ww.Push(w)
 			}
 		}
@@ -271,9 +272,8 @@ func defaultErrEncoder(sp *StaticPool) ErrorEncoder {
 		w.State().Set(worker.StateInvalid)
 		sp.events.Push(events.PoolEvent{Event: events.EventWorkerDestruct, Payload: w})
 		errS := w.Stop()
-
 		if errS != nil {
-			return payload.Payload{}, errors.E(op, errors.Errorf("%v, %v", err, errS))
+			return payload.Payload{}, errors.E(op, err, errS)
 		}
 
 		return payload.Payload{}, errors.E(op, err)
@@ -346,9 +346,4 @@ func (sp *StaticPool) allocateWorkers(numWorkers uint64) ([]worker.BaseProcess, 
 		workers = append(workers, w)
 	}
 	return workers, nil
-}
-
-// unsafe, but lightning fast []byte to string conversion
-func toString(data []byte) string {
-	return *(*string)(unsafe.Pointer(&data))
 }

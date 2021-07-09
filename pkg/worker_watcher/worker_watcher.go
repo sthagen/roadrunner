@@ -1,4 +1,4 @@
-package worker_watcher //nolint:golint,stylecheck
+package worker_watcher //nolint:stylecheck
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/spiral/roadrunner/v2/pkg/worker_watcher/container"
 )
 
-// workerCreateFunc can be nil, but in that case, dead container will not be replaced
+// NewSyncWorkerWatcher is a constructor for the Watcher
 func NewSyncWorkerWatcher(allocator worker.Allocator, numWorkers uint64, events events.Handler) Watcher {
 	ww := &workerWatcher{
 		container:  container.NewVector(numWorkers),
@@ -47,88 +47,64 @@ func (ww *workerWatcher) Watch(workers []worker.BaseProcess) error {
 	return nil
 }
 
-// return value from Get
-type get struct {
-	w   worker.BaseProcess
-	err error
-}
-
 // Get is not a thread safe operation
 func (ww *workerWatcher) Get(ctx context.Context) (worker.BaseProcess, error) {
-	c := make(chan get, 1)
 	const op = errors.Op("worker_watcher_get_free_worker")
-	go func() {
-		// FAST PATH
-		// thread safe operation
-		w, stop := ww.container.Dequeue()
-		if stop {
-			c <- get{
-				nil,
-				errors.E(op, errors.WatcherStopped),
-			}
-			return
+
+	// thread safe operation
+	w, err := ww.container.Dequeue(ctx)
+	if errors.Is(errors.WatcherStopped, err) {
+		return nil, errors.E(op, errors.WatcherStopped)
+	}
+
+	if err != nil {
+		return nil, errors.E(op, err)
+	}
+
+	// fast path, worker not nil and in the ReadyState
+	if w.State().Value() == worker.StateReady {
+		return w, nil
+	}
+
+	// =========================================================
+	// SLOW PATH
+	_ = w.Kill() // how the worker get here???????
+	// no free workers in the container
+	// try to continuously get free one
+	for {
+		w, err = ww.container.Dequeue(ctx)
+
+		if errors.Is(errors.WatcherStopped, err) {
+			return nil, errors.E(op, errors.WatcherStopped)
 		}
 
-		// fast path, worker not nil and in the ReadyState
-		if w.State().Value() == worker.StateReady {
-			c <- get{
-				w,
-				nil,
-			}
-			return
+		if err != nil {
+			return nil, errors.E(op, err)
 		}
-		// =========================================================
-		// SLOW PATH
-		_ = w.Kill() // how the worker get here???????
-		// no free workers in the container
-		// try to continuously get free one
-		for {
-			w, stop = ww.container.Dequeue()
-			if stop {
-				c <- get{
-					nil,
-					errors.E(op, errors.WatcherStopped),
-				}
-			}
 
-			switch w.State().Value() {
-			// return only workers in the Ready state
-			// check first
-			case worker.StateReady:
-				c <- get{
-					w,
-					nil,
-				}
-				return
-			case worker.StateWorking: // how??
-				ww.container.Enqueue(w) // put it back, let worker finish the work
-				continue
-			case
-				// all the possible wrong states
-				worker.StateInactive,
-				worker.StateDestroyed,
-				worker.StateErrored,
-				worker.StateStopped,
-				worker.StateInvalid,
-				worker.StateKilling,
-				worker.StateStopping:
-				// worker doing no work because it in the container
-				// so we can safely kill it (inconsistent state)
-				_ = w.Kill()
-				// try to get new worker
-				continue
-			}
+		switch w.State().Value() {
+		// return only workers in the Ready state
+		// check first
+		case worker.StateReady:
+			return w, nil
+		case worker.StateWorking: // how??
+			ww.container.Enqueue(w) // put it back, let worker finish the work
+			continue
+		case
+			// all the possible wrong states
+			worker.StateInactive,
+			worker.StateDestroyed,
+			worker.StateErrored,
+			worker.StateStopped,
+			worker.StateInvalid,
+			worker.StateKilling,
+			worker.StateStopping:
+			// worker doing no work because it in the container
+			// so we can safely kill it (inconsistent state)
+			_ = w.Kill()
+			// try to get new worker
+			continue
 		}
-	}()
-
-	select {
-	case r := <-c:
-		if r.err != nil {
-			return nil, r.err
-		}
-		return r.w, nil
-	case <-ctx.Done():
-		return nil, errors.E(op, errors.NoFreeWorkers, errors.Str("no free workers in the container, timeout exceed"))
 	}
 }
 
@@ -182,7 +158,7 @@ func (ww *workerWatcher) Push(w worker.BaseProcess) {
 }
 
 // Destroy all underlying container (but let them to complete the task)
-func (ww *workerWatcher) Destroy(ctx context.Context) {
+func (ww *workerWatcher) Destroy(_ context.Context) {
 	// destroy container, we don't use ww mutex here, since we should be able to push worker
 	ww.Lock()
 	// do not release new workers
@@ -215,7 +191,7 @@ func (ww *workerWatcher) Destroy(ctx context.Context) {
 	}
 }
 
-// Warning, this is O(n) operation, and it will return copy of the actual workers
+// List - this is O(n) operation, and it will return copy of the actual workers
 func (ww *workerWatcher) List() []worker.BaseProcess {
 	ww.RLock()
 	defer ww.RUnlock()

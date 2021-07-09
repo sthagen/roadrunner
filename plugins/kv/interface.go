@@ -1,14 +1,6 @@
 package kv
 
-// Item represents general storage item
-type Item struct {
-	// Key of item
-	Key string
-	// Value of item
-	Value string
-	// live until time provided by TTL in RFC 3339 format
-	TTL string
-}
+import kvv1 "github.com/spiral/roadrunner/v2/proto/kv/v1beta"
 
 // Storage represents single abstract storage.
 type Storage interface {
@@ -20,30 +12,28 @@ type Storage interface {
 
 	// MGet loads content of multiple values
 	// Returns the map with existing keys and associated values
-	MGet(keys ...string) (map[string]interface{}, error)
+	MGet(keys ...string) (map[string][]byte, error)
 
 	// Set used to upload item to KV with TTL
 	// 0 value in TTL means no TTL
-	Set(items ...Item) error
+	Set(items ...*kvv1.Item) error
 
 	// MExpire sets the TTL for multiply keys
-	MExpire(items ...Item) error
+	MExpire(items ...*kvv1.Item) error
 
 	// TTL return the rest time to live for provided keys
-	// Not supported for the memcached and boltdb
-	TTL(keys ...string) (map[string]interface{}, error)
+	// Not supported for the memcached
+	TTL(keys ...string) (map[string]string, error)
+
+	// Clear clean the entire storage
+	Clear() error
 
 	// Delete one or multiple keys.
 	Delete(keys ...string) error
 }
 
-// StorageDriver interface provide storage
-type StorageDriver interface {
-	Provider
-}
-
-// Provider provides storage based on the config
-type Provider interface {
-	// Provide provides Storage based on the config key
-	Provide(key string) (Storage, error)
+// Constructor provides storage based on the config
+type Constructor interface {
+	// KVConstruct provides Storage based on the config key
+	KVConstruct(key string) (Storage, error)
 }

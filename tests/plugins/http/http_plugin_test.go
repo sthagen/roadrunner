@@ -30,6 +30,7 @@ import (
 	"github.com/spiral/roadrunner/v2/plugins/logger"
 	"github.com/spiral/roadrunner/v2/plugins/resetter"
 	"github.com/spiral/roadrunner/v2/plugins/server"
+	"github.com/spiral/roadrunner/v2/plugins/static"
 	"github.com/spiral/roadrunner/v2/tests/mocks"
 	"github.com/yookoala/gofast"
 
@@ -363,7 +364,7 @@ func TestSSL(t *testing.T) {
 	time.Sleep(time.Second * 1)
 	t.Run("SSLEcho", sslEcho)
 	t.Run("SSLNoRedirect", sslNoRedirect)
-	t.Run("fCGIecho", fcgiEcho)
+	t.Run("FCGEcho", fcgiEcho)
 
 	stopCh <- struct{}{}
 	wg.Wait()
@@ -613,6 +614,92 @@ func sslPush(t *testing.T) {
 	if err2 != nil {
 		t.Errorf("fail to close the Body: error %v", err2)
 	}
+}
+
+func TestFastCGI_Echo(t *testing.T) {
+	cont, err := endure.NewContainer(nil, endure.SetLogLevel(endure.ErrorLevel))
+	assert.NoError(t, err)
+
+	cfg := &config.Viper{
+		Path:   "configs/.rr-fcgi.yaml",
+		Prefix: "rr",
+	}
+
+	err = cont.RegisterAll(
+		cfg,
+		&logger.ZapLogger{},
+		&server.Plugin{},
+		&httpPlugin.Plugin{},
+		&static.Plugin{},
+	)
+	assert.NoError(t, err)
+
+	err = cont.Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := cont.Serve()
+	assert.NoError(t, err)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	stopCh := make(chan struct{}, 1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case e := <-ch:
+				assert.Fail(t, "error", e.Error.Error())
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+			case <-sig:
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			case <-stopCh:
+				// timeout
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			}
+		}
+	}()
+
+	time.Sleep(time.Second * 1)
+	t.Run("FastCGIEcho", fcgiEcho1)
+
+	stopCh <- struct{}{}
+	wg.Wait()
+}
+
+func fcgiEcho1(t *testing.T) {
+	time.Sleep(time.Second * 2)
+	fcgiConnFactory := gofast.SimpleConnFactory("tcp", "127.0.0.1:6920")
+
+	fcgiHandler := gofast.NewHandler(
+		gofast.BasicParamsMap(gofast.BasicSession),
+		gofast.SimpleClientFactory(fcgiConnFactory),
+	)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://site.local/hello-world", nil)
+	fcgiHandler.ServeHTTP(w, req)
+
+	_, err := ioutil.ReadAll(w.Result().Body) //nolint:bodyclose
+	assert.NoError(t, err)
+	assert.Equal(t, 201, w.Result().StatusCode) //nolint:bodyclose
 }
 
 func TestFastCGI_RequestUri(t *testing.T) {
@@ -1394,6 +1481,8 @@ func informerTestAfter(t *testing.T) {
 
 	assert.NotZero(t, workerPid)
 
+	time.Sleep(time.Second * 5)
+
 	err = client.Call("informer.Workers", "http", &list)
 	assert.NoError(t, err)
 	assert.Len(t, list.Workers, 1)
@@ -1556,7 +1645,7 @@ func bigEchoHTTP(t *testing.T) {
 	assert.NoError(t, err)
 	b, err := ioutil.ReadAll(r.Body)
 	assert.NoError(t, err)
-	assert.Equal(t, 500, r.StatusCode)
+	assert.Equal(t, 400, r.StatusCode)
 	assert.Equal(t, "http_handler_max_size: request body max size is exceeded\n", string(b))
 
 	err = r.Body.Close()
@@ -1578,6 +1667,7 @@ func TestStaticEtagPlugin(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 
@@ -1633,7 +1723,7 @@ func TestStaticEtagPlugin(t *testing.T) {
 
 func serveStaticSampleEtag(t *testing.T) {
 	// OK 200 response
-	b, r, err := get("http://localhost:21603/tests/static/sample.txt")
+	b, r, err := get("http://localhost:21603/sample.txt")
 	assert.NoError(t, err)
 	assert.Equal(t, "sample\n", b)
 	assert.Equal(t, r.StatusCode, http.StatusOK)
@@ -1646,7 +1736,7 @@ func serveStaticSampleEtag(t *testing.T) {
 		Timeout: time.Second * 5,
 	}
 
-	parsedURL, _ := url.Parse("http://localhost:21603/tests/static/sample.txt")
+	parsedURL, _ := url.Parse("http://localhost:21603/sample.txt")
 
 	req := &http.Request{
 		Method: http.MethodGet,
@@ -1675,6 +1765,7 @@ func TestStaticPluginSecurity(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 
@@ -1804,7 +1895,7 @@ func serveStaticSampleNotAllowedPath(t *testing.T) {
 
 	_, r, err := get("http://localhost:21603/../../../../tests/../static/sample.txt")
 	assert.NoError(t, err)
-	assert.Equal(t, r.StatusCode, 200)
+	assert.Equal(t, 403, r.StatusCode)
 	_ = r.Body.Close()
 }
 
@@ -1823,6 +1914,7 @@ func TestStaticPlugin(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 
@@ -1879,7 +1971,7 @@ func TestStaticPlugin(t *testing.T) {
 }
 
 func staticHeaders(t *testing.T) {
-	req, err := http.NewRequest("GET", "http://localhost:21603/tests/client.php", nil)
+	req, err := http.NewRequest("GET", "http://localhost:21603/client.php", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1907,7 +1999,7 @@ func staticHeaders(t *testing.T) {
 }
 
 func staticNotForbid(t *testing.T) {
-	b, r, err := get("http://localhost:21603/tests/client.php")
+	b, r, err := get("http://localhost:21603/client.php")
 	assert.NoError(t, err)
 	assert.Equal(t, all("../../../tests/client.php"), b)
 	assert.Equal(t, all("../../../tests/client.php"), b)
@@ -1915,7 +2007,7 @@ func staticNotForbid(t *testing.T) {
 }
 
 func serveStaticSample(t *testing.T) {
-	b, r, err := get("http://localhost:21603/tests/static/sample.txt")
+	b, r, err := get("http://localhost:21603/sample.txt")
 	assert.NoError(t, err)
 	assert.Equal(t, "sample\n", b)
 	_ = r.Body.Close()
@@ -1936,6 +2028,7 @@ func TestStaticDisabled_Error(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 	assert.Error(t, cont.Init())
@@ -1956,6 +2049,7 @@ func TestStaticFilesDisabled(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 
@@ -2032,10 +2126,13 @@ func TestStaticFilesForbid(t *testing.T) {
 
 	mockLogger.EXPECT().Debug("worker destructed", "pid", gomock.Any()).AnyTimes()
 	mockLogger.EXPECT().Debug("worker constructed", "pid", gomock.Any()).AnyTimes()
-	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/tests/http?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
-	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/tests/client.XXX?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
-	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/tests/client.php?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
+	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/http?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
+	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/client.XXX?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
+	mockLogger.EXPECT().Debug("201 GET http://localhost:34653/client.php?hello=world", "remote", "127.0.0.1", "elapsed", gomock.Any()).MinTimes(1)
 	mockLogger.EXPECT().Error("file open error", "error", gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Debug("no such file or directory", "error", gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Debug("possible path to dir provided").AnyTimes()
+	mockLogger.EXPECT().Debug("file extension is forbidden", gomock.Any(), gomock.Any()).AnyTimes()
 	mockLogger.EXPECT().Error(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes() // placeholder for the workerlogerror
 
 	err = cont.RegisterAll(
@@ -2044,6 +2141,7 @@ func TestStaticFilesForbid(t *testing.T) {
 		&server.Plugin{},
 		&httpPlugin.Plugin{},
 		&gzip.Plugin{},
+		&static.Plugin{},
 	)
 	assert.NoError(t, err)
 
@@ -2094,38 +2192,114 @@ func TestStaticFilesForbid(t *testing.T) {
 	t.Run("StaticTestFilesDir", staticTestFilesDir)
 	t.Run("StaticNotFound", staticNotFound)
 	t.Run("StaticFilesForbid", staticFilesForbid)
-	t.Run("StaticFilesAlways", staticFilesAlways)
 
 	stopCh <- struct{}{}
 	wg.Wait()
 }
 
 func staticTestFilesDir(t *testing.T) {
-	b, r, err := get("http://localhost:34653/tests/http?hello=world")
+	b, r, err := get("http://localhost:34653/http?hello=world")
 	assert.NoError(t, err)
-	assert.Equal(t, "403 Forbidden\n", b)
+	assert.Equal(t, "WORLD", b)
 	_ = r.Body.Close()
 }
 
 func staticNotFound(t *testing.T) {
-	b, _, _ := get("http://localhost:34653/tests/client.XXX?hello=world") //nolint:bodyclose
-	assert.Equal(t, "404 page not found\n", b)
-}
-
-func staticFilesAlways(t *testing.T) {
-	_, r, err := get("http://localhost:34653/tests/favicon.ico")
-	assert.NoError(t, err)
-	assert.Equal(t, 404, r.StatusCode)
-	_ = r.Body.Close()
+	b, _, _ := get("http://localhost:34653/client.XXX?hello=world") //nolint:bodyclose
+	assert.Equal(t, "WORLD", b)
 }
 
 func staticFilesForbid(t *testing.T) {
-	b, r, err := get("http://localhost:34653/tests/client.php?hello=world")
+	b, r, err := get("http://localhost:34653/client.php?hello=world")
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, "403 Forbidden\n", b)
+	assert.Equal(t, "WORLD", b)
 	_ = r.Body.Close()
+}
+
+func TestHTTPIssue659(t *testing.T) {
+	cont, err := endure.NewContainer(nil, endure.SetLogLevel(endure.ErrorLevel))
+	assert.NoError(t, err)
+
+	cfg := &config.Viper{
+		Path:   "configs/.rr-issue659.yaml",
+		Prefix: "rr",
+	}
+
+	err = cont.RegisterAll(
+		cfg,
+		&rpcPlugin.Plugin{},
+		&logger.ZapLogger{},
+		&server.Plugin{},
+		&httpPlugin.Plugin{},
+	)
+	assert.NoError(t, err)
+
+	err = cont.Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := cont.Serve()
+	assert.NoError(t, err)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	stopCh := make(chan struct{}, 1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case e := <-ch:
+				assert.Fail(t, "error", e.Error.Error())
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+			case <-sig:
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			case <-stopCh:
+				// timeout
+				err = cont.Stop()
+				if err != nil {
+					assert.FailNow(t, "error", err.Error())
+				}
+				return
+			}
+		}
+	}()
+
+	time.Sleep(time.Second * 1)
+	t.Run("HTTPIssue659", echoIssue659)
+
+	stopCh <- struct{}{}
+
+	wg.Wait()
+}
+
+func echoIssue659(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://localhost:32552", nil)
+	assert.NoError(t, err)
+
+	r, err := http.DefaultClient.Do(req)
+	assert.NoError(t, err)
+	b, err := ioutil.ReadAll(r.Body)
+	assert.NoError(t, err)
+	assert.Empty(t, b)
+	assert.Equal(t, 444, r.StatusCode)
+
+	err = r.Body.Close()
+	assert.NoError(t, err)
 }
 
 // HELPERS

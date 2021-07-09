@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -13,10 +12,13 @@ import (
 	"github.com/spiral/roadrunner/v2/plugins/config"
 	"github.com/spiral/roadrunner/v2/plugins/kv"
 	"github.com/spiral/roadrunner/v2/plugins/logger"
+	kvv1 "github.com/spiral/roadrunner/v2/proto/kv/v1beta"
+	"github.com/spiral/roadrunner/v2/utils"
 	bolt "go.etcd.io/bbolt"
 )
 
 type Driver struct {
+	clearMu sync.RWMutex
 	// db instance
 	DB *bolt.DB
 	// name should be UTF-8
@@ -45,14 +47,21 @@ func NewBoltDBDriver(log logger.Logger, key string, cfgPlugin config.Configurer,
 		return nil, errors.E(op, err)
 	}
 
-	d.bucket = []byte(d.cfg.Bucket)
-	d.timeout = time.Duration(d.cfg.Interval) * time.Second
-	d.gc = sync.Map{}
-
 	// add default values
 	d.cfg.InitDefaults()
 
-	db, err := bolt.Open(path.Join(d.cfg.Dir, d.cfg.File), os.FileMode(d.cfg.Permissions), nil)
+	d.bucket = []byte(d.cfg.bucket)
+	d.timeout = time.Duration(d.cfg.Interval) * time.Second
+	d.gc = sync.Map{}
+
+	db, err := bolt.Open(d.cfg.File, os.FileMode(d.cfg.Permissions), &bolt.Options{
+		Timeout:        time.Second * 20,
+		NoGrowSync:     false,
+		NoFreelistSync: false,
+		ReadOnly:       false,
+		NoSync:         false,
+	})
+
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -63,7 +72,7 @@ func NewBoltDBDriver(log logger.Logger, key string, cfgPlugin config.Configurer,
 	// tx.Commit invokes via the db.Update
 	err = db.Update(func(tx *bolt.Tx) error {
 		const upOp = errors.Op("boltdb_plugin_update")
-		_, err = tx.CreateBucketIfNotExists([]byte(d.cfg.Bucket))
+		_, err = tx.CreateBucketIfNotExists([]byte(d.cfg.bucket))
 		if err != nil {
 			return errors.E(op, upOp)
 		}
@@ -160,7 +169,7 @@ func (d *Driver) Get(key string) ([]byte, error) {
 	return val, nil
 }
 
-func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
+func (d *Driver) MGet(keys ...string) (map[string][]byte, error) {
 	const op = errors.Op("boltdb_driver_mget")
 	// defense
 	if keys == nil {
@@ -175,7 +184,7 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 		}
 	}
 
-	m := make(map[string]interface{}, len(keys))
+	m := make(map[string][]byte, len(keys))
 
 	err := d.DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(d.bucket)
@@ -184,7 +193,7 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 		}
 
 		buf := new(bytes.Buffer)
-		var out string
+		var out []byte
 		buf.Grow(100)
 		for i := range keys {
 			value := b.Get([]byte(keys[i]))
@@ -198,7 +207,7 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 				}
 				m[keys[i]] = out
 				buf.Reset()
-				out = ""
+				out = nil
 			}
 		}
 
@@ -212,7 +221,7 @@ func (d *Driver) MGet(keys ...string) (map[string]interface{}, error) {
 }
 
 // Set puts the K/V to the bolt
-func (d *Driver) Set(items ...kv.Item) error {
+func (d *Driver) Set(items ...*kvv1.Item) error {
 	const op = errors.Op("boltdb_driver_set")
 	if items == nil {
 		return errors.E(op, errors.NoKeys)
@@ -239,8 +248,8 @@ func (d *Driver) Set(items ...kv.Item) error {
 		// performance note: pass a prepared bytes slice with initial cap
 		// we can't move buf and gob out of loop, because we need to clear both from data
 		// but gob will contain (w/o re-init) the past data
-		buf := bytes.Buffer{}
-		encoder := gob.NewEncoder(&buf)
+		buf := new(bytes.Buffer)
+		encoder := gob.NewEncoder(buf)
 		if errors.Is(errors.EmptyItem, err) {
 			return errors.E(op, errors.EmptyItem)
 		}
@@ -258,14 +267,14 @@ func (d *Driver) Set(items ...kv.Item) error {
 
 		// if there are no errors, and TTL > 0,  we put the key with timeout to the hashmap, for future check
 		// we do not need mutex here, since we use sync.Map
-		if items[i].TTL != "" {
+		if items[i].Timeout != "" {
 			// check correctness of provided TTL
-			_, err := time.Parse(time.RFC3339, items[i].TTL)
+			_, err := time.Parse(time.RFC3339, items[i].Timeout)
 			if err != nil {
 				return errors.E(op, err)
 			}
 			// Store key TTL in the separate map
-			d.gc.Store(items[i].Key, items[i].TTL)
+			d.gc.Store(items[i].Key, items[i].Timeout)
 		}
 
 		buf.Reset()
@@ -322,25 +331,25 @@ func (d *Driver) Delete(keys ...string) error {
 
 // MExpire sets the expiration time to the key
 // If key already has the expiration time, it will be overwritten
-func (d *Driver) MExpire(items ...kv.Item) error {
+func (d *Driver) MExpire(items ...*kvv1.Item) error {
 	const op = errors.Op("boltdb_driver_mexpire")
 	for i := range items {
-		if items[i].TTL == "" || strings.TrimSpace(items[i].Key) == "" {
+		if items[i].Timeout == "" || strings.TrimSpace(items[i].Key) == "" {
 			return errors.E(op, errors.Str("should set timeout and at least one key"))
 		}
 
 		// verify provided TTL
-		_, err := time.Parse(time.RFC3339, items[i].TTL)
+		_, err := time.Parse(time.RFC3339, items[i].Timeout)
 		if err != nil {
 			return errors.E(op, err)
 		}
 
-		d.gc.Store(items[i].Key, items[i].TTL)
+		d.gc.Store(items[i].Key, items[i].Timeout)
 	}
 	return nil
 }
 
-func (d *Driver) TTL(keys ...string) (map[string]interface{}, error) {
+func (d *Driver) TTL(keys ...string) (map[string]string, error) {
 	const op = errors.Op("boltdb_driver_ttl")
 	if keys == nil {
 		return nil, errors.E(op, errors.NoKeys)
@@ -354,7 +363,7 @@ func (d *Driver) TTL(keys ...string) (map[string]interface{}, error) {
 		}
 	}
 
-	m := make(map[string]interface{}, len(keys))
+	m := make(map[string]string, len(keys))
 
 	for i := range keys {
 		if item, ok := d.gc.Load(keys[i]); ok {
@@ -363,6 +372,35 @@ func (d *Driver) TTL(keys ...string) (map[string]interface{}, error) {
 		}
 	}
 	return m, nil
+}
+
+func (d *Driver) Clear() error {
+	err := d.DB.Update(func(tx *bolt.Tx) error {
+		err := tx.DeleteBucket(d.bucket)
+		if err != nil {
+			d.log.Error("boltdb delete bucket", "error", err)
+			return err
+		}
+
+		_, err = tx.CreateBucket(d.bucket)
+		if err != nil {
+			d.log.Error("boltdb create bucket", "error", err)
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		d.log.Error("clear transaction failed", "error", err)
+		return err
+	}
+
+	d.clearMu.Lock()
+	d.gc = sync.Map{}
+	d.clearMu.Unlock()
+
+	return nil
 }
 
 // ========================= PRIVATE =================================
@@ -374,6 +412,8 @@ func (d *Driver) startGCLoop() { //nolint:gocognit
 		for {
 			select {
 			case <-t.C:
+				d.clearMu.RLock()
+
 				// calculate current time before loop started to be fair
 				now := time.Now()
 				d.gc.Range(func(key, value interface{}) bool {
@@ -393,7 +433,7 @@ func (d *Driver) startGCLoop() { //nolint:gocognit
 							if b == nil {
 								return errors.E(op, errors.NoSuchBucket)
 							}
-							err := b.Delete([]byte(k))
+							err := b.Delete(utils.AsBytes(k))
 							if err != nil {
 								return errors.E(op, err)
 							}
@@ -406,6 +446,8 @@ func (d *Driver) startGCLoop() { //nolint:gocognit
 					}
 					return true
 				})
+
+				d.clearMu.RUnlock()
 			case <-d.stop:
 				err := d.DB.Close()
 				if err != nil {
